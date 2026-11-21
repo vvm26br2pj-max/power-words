@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power Words</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 12px;
+    font-family: "Comic Sans MS", "Chalkboard SE", "Avenir Next", system-ui, sans-serif;
+    background: #fffdf5; color: #222;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { text-align: center; margin: 4px 0 2px; font-size: 28px; }
+  p.tip { text-align: center; margin: 0 0 12px; color: #666; font-size: 16px; }
+  .group-title { font-size: 18px; font-weight: bold; margin: 16px 4px 8px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+  }
+  button.word {
+    position: relative;
+    font: inherit; font-size: 28px; font-weight: bold;
+    padding: 18px 6px 14px;
+    border: 3px solid rgba(0,0,0,.12); border-radius: 16px;
+    background: var(--c); color: #222;
+    cursor: pointer; touch-action: manipulation;
+    box-shadow: 0 4px 0 rgba(0,0,0,.15);
+    transition: transform .08s;
+  }
+  button.word .num {
+    position: absolute; top: 4px; left: 8px;
+    font-size: 12px; font-weight: normal; color: rgba(0,0,0,.45);
+  }
+  button.word:active, button.word.speaking {
+    transform: translateY(3px) scale(1.05);
+    box-shadow: 0 1px 0 rgba(0,0,0,.15);
+    border-color: #333;
+  }
+</style>
+</head>
+<body>
+<h1>⭐ Power Words ⭐</h1>
+<p class="tip">Tap a word to hear it!</p>
+<div id="app"></div>
+
+<script>
+var groups = [
+  { title: "Start here · Words 1–13", color: "#fff3a3",
+    words: "the of and a to in is you that it he for was" },
+  { title: "Words 14–33", color: "#cdeffd",
+    words: "on are as with his they at be this from I have or by one had not but what all" },
+  { title: "Words 34–53", color: "#d8f5c8",
+    words: "were when we there can an your which their said if do will each about how up out them then" },
+  { title: "Words 54–73", color: "#ffd9e6",
+    words: "she many some so these would other into has more her two like him see time could no make than" },
+  { title: "Words 74–93", color: "#e6dcff",
+    words: "first been its who now people my made over did down only way find use may water long little very" },
+  { title: "Words 94–109", color: "#ffe0c2",
+    words: "after words called just where most know get through back much before go good new write" }
+];
+
+// A few words sound wrong when read alone, so we tell the voice how to say them.
+var sayAs = { "a": "uh", "I": "eye", "read": "reed" };
+
+var voice = null;
+function pickVoice() {
+  var voices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+  var en = voices.filter(function (v) { return /^en[-_]US/i.test(v.lang); });
+  if (!en.length) en = voices.filter(function (v) { return /^en/i.test(v.lang); });
+  var preferred = ["Samantha", "Karen", "Moira", "Google US English"];
+  for (var i = 0; i < preferred.length; i++) {
+    for (var j = 0; j < en.length; j++) {
+      if (en[j].name.indexOf(preferred[i]) === 0) { voice = en[j]; return; }
+    }
+  }
+  voice = en[0] || null;
+}
+if (window.speechSynthesis) {
+  pickVoice();
+  speechSynthesis.onvoiceschanged = pickVoice;
+}
+
+function speak(word, btn) {
+  if (!window.speechSynthesis) { alert("Sorry, this browser can't talk."); return; }
+  speechSynthesis.cancel();
+  var u = new SpeechSynthesisUtterance(sayAs[word] || word);
+  if (voice) u.voice = voice;
+  u.lang = "en-US";
+  u.rate = 0.8;
+  u.pitch = 1.05;
+  btn.classList.add("speaking");
+  u.onend = u.onerror = function () { btn.classList.remove("speaking"); };
+  setTimeout(function () { btn.classList.remove("speaking"); }, 1500);
+  speechSynthesis.speak(u);
+}
+
+var app = document.getElementById("app");
+var n = 1;
+groups.forEach(function (g) {
+  var t = document.createElement("div");
+  t.className = "group-title";
+  t.textContent = g.title;
+  app.appendChild(t);
+  var grid = document.createElement("div");
+  grid.className = "grid";
+  g.words.split(" ").forEach(function (w) {
+    var b = document.createElement("button");
+    b.className = "word";
+    b.style.setProperty("--c", g.color);
+    b.innerHTML = '<span class="num">' + n + '</span>' + w;
+    b.addEventListener("click", function () { speak(w, b); });
+    grid.appendChild(b);
+    n++;
+  });
+  app.appendChild(grid);
+});
+</script>
+</body>
+</html>
