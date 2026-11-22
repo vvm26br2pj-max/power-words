@@ -82,6 +82,41 @@
   .tile.great button.word { background: #2fa84f; color: #fff; border-color: #1f7a37; transform: scale(1.06); }
   .tile.great .status { color: #1f7a37; font-size: 18px; }
   .tile.tried .status { color: #8a5a00; }
+
+  /* Flashcards */
+  #cards { display: none; max-width: 560px; margin: 0 auto; text-align: center; }
+  body.cards-mode #cards { display: block; }
+  body.cards-mode #app { display: none; }
+  .cardTop { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; color: #776; margin: 4px 6px 10px; }
+  .cardTop .r { color: #1f7a37; } .cardTop .w { color: #c0392b; }
+  #card {
+    display: flex; align-items: center; justify-content: center; width: 100%; min-height: 260px;
+    font: inherit; font-size: 96px; font-weight: bold; color: #222; overflow-wrap: anywhere;
+    background: var(--c, #fff3a3); border: 6px solid rgba(0,0,0,.12); border-radius: 28px;
+    box-shadow: 0 8px 0 rgba(0,0,0,.15); cursor: pointer; touch-action: manipulation;
+    transition: background .2s, color .2s, transform .15s;
+  }
+  #card.listening { border-color: #e0443e; animation: listen 1s ease-in-out infinite; }
+  #card.right { background: #2fa84f; color: #fff; border-color: #1f7a37; transform: scale(1.03); }
+  #card.wrong { background: #e0443e; color: #fff; border-color: #a8302b; animation: shake .35s; }
+  @keyframes shake { 25% { transform: translateX(-10px); } 75% { transform: translateX(10px); } }
+  #card.pop { animation: cardIn .25s ease-out; }
+  @keyframes cardIn { from { transform: scale(.85) rotate(-3deg); opacity: 0; } }
+  #cardStatus { min-height: 28px; margin: 14px 0 10px; font-size: 20px; font-weight: bold; color: #555; }
+  .cardBtns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .cardBtns button {
+    font: inherit; font-size: 22px; font-weight: bold; color: #fff; border: none; border-radius: 16px;
+    padding: 12px 22px; cursor: pointer; touch-action: manipulation; box-shadow: 0 4px 0 rgba(0,0,0,.2);
+  }
+  .cardBtns button:active { transform: translateY(3px); box-shadow: none; }
+  .cardBtns .mic { background: #e0443e; } .cardBtns .hear { background: #3b7be0; }
+  .cardBtns .next { background: #2fa84f; } .cardBtns .plain { background: #8a7f6a; }
+  .cardBtns button[hidden] { display: none; }
+  @media (max-width: 480px) {
+    .modes { width: 100%; }
+    .modes button { flex: 1; font-size: 15px; padding: 8px 4px; }
+    #card { min-height: 200px; }
+  }
 </style>
 </head>
 <body>
@@ -89,10 +124,26 @@
 <div class="modes">
   <button id="modeHear">🔊 Hear it</button>
   <button id="modeRead">🎤 Read it</button>
+  <button id="modeCards">🃏 Flashcards</button>
 </div>
 <p class="tip" id="tip"></p>
 <div id="banner"></div>
 <div id="app"></div>
+<div id="cards">
+  <div class="cardTop">
+    <span id="cardProg"></span>
+    <span><span class="r">✓ <span id="cardRight">0</span></span> &nbsp; <span class="w">✗ <span id="cardWrong">0</span></span></span>
+  </div>
+  <button id="card"></button>
+  <div id="cardStatus"></div>
+  <div class="cardBtns">
+    <button class="mic" id="cardMic">🎤 Read it</button>
+    <button class="hear" id="cardHear" hidden>🔊 Hear it</button>
+    <button class="next" id="cardNext" hidden>Next ➜</button>
+    <button class="next" id="cardRedo" hidden></button>
+    <button class="plain" id="cardShuffle" hidden>🔀 All words again</button>
+  </div>
+</div>
 
 <script>
 var groups = [
@@ -204,15 +255,76 @@ function heardWord(word, transcript) {
   return false;
 }
 
-var active = null; // { rec, tile, done }
+var active = null; // the listen in progress
+
 function stopListening() {
   if (active && !active.done) {
     active.done = true;
     try { active.rec.abort(); } catch (e) {}
-    active.tile.classList.remove("listening");
+    if (active.onCancel) active.onCancel();
   }
   active = null;
 }
+
+// Listen for one word. h.done({ ok, kind, heard, message }) is called once:
+// kind is "hit", "miss", "silent" or "mic" (microphone problem).
+function recognize(word, h) {
+  stopListening();
+  hideBanner();
+  if (!Recognition) {
+    showBanner("This browser can't listen. Read it works in Safari on an iPad or iPhone, or in Chrome on a computer.");
+    return false;
+  }
+  if (window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+
+  var rec = new Recognition();
+  rec.lang = "en-US";
+  rec.interimResults = true;
+  rec.maxAlternatives = 5;
+  rec.continuous = false;
+  var me = { rec: rec, done: false, heard: "", onCancel: h.onCancel };
+  active = me;
+
+  function finish(kind, message) {
+    if (me.done) return;
+    me.done = true;
+    if (active === me) active = null;
+    try { rec.abort(); } catch (e) {}
+    h.done({ ok: kind === "hit", kind: kind, heard: me.heard, message: message });
+  }
+
+  rec.onresult = function (e) {
+    for (var i = 0; i < e.results.length; i++) {
+      for (var k = 0; k < e.results[i].length; k++) {
+        var text = e.results[i][k].transcript;
+        if (heardWord(word, text)) { finish("hit"); return; }
+        if (k === 0 && text.trim()) me.heard = text.trim();
+      }
+    }
+  };
+  rec.onerror = function (e) {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      finish("mic", "The microphone isn't working.");
+      if (window.self !== window.top) {
+        showBanner("The microphone can't be used inside this page. Open " +
+          '<a href="' + GITHUB_URL + '" target="_blank" rel="noopener">the Power Words website</a> in Safari to use Read it.');
+      } else {
+        showBanner("Please allow the microphone. On an iPad, also check that Dictation is on: " +
+          "Settings → General → Keyboard → Enable Dictation.");
+      }
+    } else if (e.error === "no-speech") {
+      finish("silent", "I didn't hear anything. Tap and try again!");
+    } else if (e.error !== "aborted") {
+      finish(me.heard ? "miss" : "silent");
+    }
+  };
+  rec.onend = function () { finish(me.heard ? "miss" : "silent"); };
+
+  try { rec.start(); } catch (err) { finish("silent", "Tap to try again."); return false; }
+  setTimeout(function () { if (!me.done) { try { rec.stop(); } catch (e) {} } }, 7000);
+  return true;
+}
+
 function clearTile(tile) {
   tile.classList.remove("listening", "tried", "great", "open");
 }
@@ -222,78 +334,42 @@ function hideForTwoMinutes(tile) {
   setTimeout(function () { tile.classList.remove("gone"); }, 2 * 60 * 1000);
 }
 
+// Read it mode on the word board.
 function listen(word, tile) {
-  stopListening();
-  hideBanner();
-  if (!Recognition) {
-    showBanner("This browser can't listen. Read it works in Safari on an iPad or iPhone, or in Chrome on a computer.");
-    return;
-  }
-  if (window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
-
   var status = tile.querySelector(".status");
-  var rec = new Recognition();
-  rec.lang = "en-US";
-  rec.interimResults = true;
-  rec.maxAlternatives = 5;
-  rec.continuous = false;
-  var me = { rec: rec, tile: tile, done: false, heard: "" };
-  active = me;
-
-  function finish(ok, message) {
-    if (me.done) return;
-    me.done = true;
-    if (active === me) active = null;
-    try { rec.abort(); } catch (e) {}
-    tile.classList.remove("listening");
-    if (ok) {
-      tile.classList.add("great");
-      status.textContent = "⭐ Great reading!";
-      setTimeout(function () { hideForTwoMinutes(tile); }, 1300);
-    } else {
-      tile.classList.add("tried");
-      status.textContent = message ||
-        (me.heard ? "Try again! I heard “" + me.heard + "”" : "Try again!");
-    }
-  }
-
-  rec.onresult = function (e) {
-    for (var i = 0; i < e.results.length; i++) {
-      for (var k = 0; k < e.results[i].length; k++) {
-        var text = e.results[i][k].transcript;
-        if (heardWord(word, text)) { finish(true); return; }
-        if (k === 0 && text.trim()) me.heard = text.trim();
-      }
-    }
-  };
-  rec.onerror = function (e) {
-    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
-      finish(false, "The microphone isn't working.");
-      if (window.self !== window.top) {
-        showBanner("The microphone can't be used inside this page. Open " +
-          '<a href="' + GITHUB_URL + '" target="_blank" rel="noopener">the Power Words website</a> in Safari to use Read it.');
+  var started = recognize(word, {
+    onCancel: function () { tile.classList.remove("listening"); },
+    done: function (r) {
+      tile.classList.remove("listening");
+      if (r.ok) {
+        tile.classList.add("great");
+        status.textContent = "⭐ Great reading!";
+        setTimeout(function () { hideForTwoMinutes(tile); }, 1300);
       } else {
-        showBanner("Please allow the microphone. On an iPad, also check that Dictation is on: " +
-          "Settings → General → Keyboard → Enable Dictation.");
+        tile.classList.add("tried");
+        status.textContent = r.message ||
+          (r.heard ? "Try again! I heard “" + r.heard + "”" : "Try again!");
       }
-    } else if (e.error === "no-speech") {
-      finish(false, "I didn't hear anything. Tap the word and try again!");
-    } else if (e.error !== "aborted") {
-      finish(false);
     }
-  };
-  rec.onend = function () { finish(false); };
-
-  clearTile(tile);
-  tile.classList.add("listening");
-  status.textContent = "🎤 Listening… read the word!";
-  try { rec.start(); } catch (err) { finish(false, "Tap the word to try again."); }
-  setTimeout(function () { if (!me.done) { try { rec.stop(); } catch (e) {} } }, 7000);
+  });
+  if (started) {
+    clearTile(tile);
+    tile.classList.add("listening");
+    status.textContent = "🎤 Listening… read the word!";
+  }
 }
 
 // ---------- mode switch ----------
 var mode = "hear";
-try { if (localStorage.getItem("powerWords.mode") === "read") mode = "read"; } catch (e) {}
+try {
+  var savedMode = localStorage.getItem("powerWords.mode");
+  if (savedMode === "read" || savedMode === "cards") mode = savedMode;
+} catch (e) {}
+var TIPS = {
+  hear: "Tap a word to hear it!",
+  read: "Tap a word, then read it out loud!",
+  cards: "Read the word on the card out loud!"
+};
 function setMode(m) {
   mode = m;
   try { localStorage.setItem("powerWords.mode", m); } catch (e) {}
@@ -301,12 +377,14 @@ function setMode(m) {
   document.querySelectorAll(".tile").forEach(clearTile);
   document.getElementById("modeHear").classList.toggle("on", m === "hear");
   document.getElementById("modeRead").classList.toggle("on", m === "read");
-  document.getElementById("tip").textContent = m === "hear"
-    ? "Tap a word to hear it!"
-    : "Tap a word, then read it out loud!";
+  document.getElementById("modeCards").classList.toggle("on", m === "cards");
+  document.body.classList.toggle("cards-mode", m === "cards");
+  document.getElementById("tip").textContent = TIPS[m];
+  if (m === "cards") showCard();
 }
 document.getElementById("modeHear").onclick = function () { setMode("hear"); };
 document.getElementById("modeRead").onclick = function () { setMode("read"); };
+document.getElementById("modeCards").onclick = function () { setMode("cards"); };
 
 // ---------- the words ----------
 var app = document.getElementById("app");
@@ -372,6 +450,110 @@ groups.forEach(function (g) {
   });
   app.appendChild(grid);
 });
+// ---------- flashcards ----------
+var ALL = []; // { w, color }
+groups.forEach(function (g) {
+  g.words.split(" ").forEach(function (w) { ALL.push({ w: w, color: g.color }); });
+});
+function shuffled(list) {
+  var a = list.slice();
+  for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; }
+  return a;
+}
+var deck = { cards: shuffled(ALL), i: 0, right: 0, wrong: 0, missed: [], result: null };
+function newDeck(list) {
+  deck = { cards: shuffled(list), i: 0, right: 0, wrong: 0, missed: [], result: null };
+}
+
+var cardEl = document.getElementById("card");
+var cardStatus = document.getElementById("cardStatus");
+function btn(id, show) { document.getElementById(id).hidden = !show; }
+
+function showCard() {
+  stopListening();
+  document.getElementById("cardRight").textContent = deck.right;
+  document.getElementById("cardWrong").textContent = deck.wrong;
+  cardEl.className = "";
+  void cardEl.offsetWidth;
+  if (deck.i >= deck.cards.length) {
+    // Finished the deck.
+    document.getElementById("cardProg").textContent = "All done!";
+    cardEl.style.setProperty("--c", "#fff3a3");
+    cardEl.style.fontSize = "64px";
+    cardEl.textContent = deck.wrong ? "🎉" : "🏆";
+    cardEl.classList.add("pop");
+    cardStatus.textContent = "You read " + deck.right + " of " + deck.cards.length + " words right the first time!";
+    btn("cardMic", false); btn("cardHear", false); btn("cardNext", false);
+    var redo = document.getElementById("cardRedo");
+    redo.textContent = "🔁 Practice the red ones (" + deck.missed.length + ")";
+    btn("cardRedo", deck.missed.length > 0);
+    btn("cardShuffle", true);
+    say(deck.wrong ? "All done! Great work." : "Perfect! You read every word.");
+    return;
+  }
+  var c = deck.cards[deck.i];
+  deck.result = null;
+  document.getElementById("cardProg").textContent = "Card " + (deck.i + 1) + " of " + deck.cards.length;
+  cardEl.style.setProperty("--c", c.color);
+  cardEl.style.fontSize = c.w.length > 6 ? "72px" : "96px";
+  cardEl.textContent = c.w;
+  cardEl.classList.add("pop");
+  cardStatus.textContent = "Tap 🎤 and read the word!";
+  btn("cardMic", true); btn("cardHear", false); btn("cardNext", false);
+  btn("cardRedo", false); btn("cardShuffle", false);
+}
+
+function listenCard() {
+  if (deck.i >= deck.cards.length) return;
+  var c = deck.cards[deck.i];
+  var started = recognize(c.w, {
+    onCancel: function () { cardEl.classList.remove("listening"); },
+    done: function (r) {
+      cardEl.classList.remove("listening");
+      if (r.ok) {
+        if (deck.result === null) { deck.result = true; deck.right++; }
+        cardEl.classList.remove("wrong"); void cardEl.offsetWidth;
+        cardEl.classList.add("right");
+        cardStatus.textContent = "⭐ Great reading!";
+        btn("cardMic", false); btn("cardHear", false); btn("cardNext", true);
+      } else if (r.kind === "miss") {
+        if (deck.result === null) { deck.result = false; deck.wrong++; deck.missed.push(c); }
+        cardEl.classList.remove("wrong"); void cardEl.offsetWidth;
+        cardEl.classList.add("wrong");
+        cardStatus.textContent = "Not quite! I heard “" + r.heard + "”";
+        document.getElementById("cardMic").textContent = "🎤 Try again";
+        btn("cardMic", true); btn("cardHear", true); btn("cardNext", true);
+      } else {
+        cardStatus.textContent = r.message || "I didn't hear anything. Tap 🎤 and try again!";
+        btn("cardMic", true);
+      }
+      document.getElementById("cardRight").textContent = deck.right;
+      document.getElementById("cardWrong").textContent = deck.wrong;
+    }
+  });
+  if (started) {
+    cardEl.classList.remove("right", "wrong", "pop");
+    cardEl.classList.add("listening");
+    cardStatus.textContent = "🎤 Listening…";
+  }
+}
+
+cardEl.onclick = listenCard;
+document.getElementById("cardMic").onclick = listenCard;
+document.getElementById("cardHear").onclick = function () {
+  var c = deck.cards[deck.i];
+  if (c) speak(c.w);
+};
+document.getElementById("cardNext").onclick = function () {
+  deck.i++;
+  document.getElementById("cardMic").textContent = "🎤 Read it";
+  showCard();
+  // Tapping Next counts as a tap, so start listening for the new card straight away.
+  if (deck.i < deck.cards.length) listenCard();
+};
+document.getElementById("cardRedo").onclick = function () { newDeck(deck.missed); showCard(); };
+document.getElementById("cardShuffle").onclick = function () { newDeck(ALL); showCard(); };
+
 setMode(mode);
 </script>
 </body>
