@@ -12,13 +12,29 @@
     background: #fffdf5; color: #222;
     -webkit-user-select: none; user-select: none;
   }
-  h1 { text-align: center; margin: 4px 0 2px; font-size: 28px; }
-  p.tip { text-align: center; margin: 0 0 12px; color: #666; font-size: 16px; }
+  h1 { text-align: center; margin: 4px 0 8px; font-size: 28px; }
+  p.tip { text-align: center; margin: 8px 0 12px; color: #666; font-size: 16px; }
+  .modes {
+    display: flex; justify-content: center; gap: 0; margin: 0 auto; width: max-content;
+    background: #efe9d6; border-radius: 999px; padding: 4px;
+  }
+  .modes button {
+    font: inherit; font-size: 19px; font-weight: bold; color: #776;
+    border: none; background: none; border-radius: 999px; padding: 8px 18px;
+    cursor: pointer; touch-action: manipulation;
+  }
+  .modes button.on { background: #fff; color: #222; box-shadow: 0 2px 5px rgba(0,0,0,.15); }
+  #banner {
+    display: none; max-width: 640px; margin: 0 auto 12px; padding: 10px 14px;
+    background: #fff1d6; border: 2px solid #f0c060; border-radius: 14px; font-size: 16px; text-align: center;
+  }
+  #banner.show { display: block; }
+  #banner a { color: #2459c7; font-weight: bold; }
   .group-title { font-size: 18px; font-weight: bold; margin: 16px 4px 8px; }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 10px;
+    gap: 10px; align-items: start;
   }
   button.word {
     position: relative;
@@ -28,7 +44,7 @@
     background: var(--c); color: #222;
     cursor: pointer; touch-action: manipulation;
     box-shadow: 0 4px 0 rgba(0,0,0,.15);
-    transition: transform .08s;
+    transition: transform .08s, background .2s;
   }
   button.word .num {
     position: absolute; top: 4px; left: 8px;
@@ -42,22 +58,40 @@
   .tile { display: flex; flex-direction: column; gap: 6px; transition: opacity .4s; }
   .tile > button.word { width: 100%; }
   .tile.gone { opacity: 0; pointer-events: none; }
-  .choices { display: none; gap: 6px; }
-  .tile.open .choices { display: flex; }
-  .choices button {
+
+  /* Hear it mode: tick / cross */
+  .choices, .readChoices { display: none; gap: 6px; }
+  .tile.open .choices, .tile.tried .readChoices { display: flex; }
+  .choices button, .readChoices button {
     flex: 1; font-size: 30px; font-weight: bold; color: #fff;
     border: none; border-radius: 14px; padding: 8px 0;
     cursor: pointer; touch-action: manipulation;
     box-shadow: 0 3px 0 rgba(0,0,0,.2);
   }
-  .choices .yes { background: #2fa84f; }
+  .choices .yes, .readChoices .yes { background: #2fa84f; }
   .choices .no  { background: #e0443e; }
-  .choices button:active { transform: translateY(2px); box-shadow: none; }
+  .readChoices .hear { background: #3b7be0; font-size: 26px; }
+  .choices button:active, .readChoices button:active { transform: translateY(2px); box-shadow: none; }
+
+  /* Read it mode */
+  .status { display: none; text-align: center; font-size: 15px; font-weight: bold; line-height: 1.25; }
+  .tile.listening .status, .tile.tried .status, .tile.great .status { display: block; }
+  .tile.listening button.word { border-color: #e0443e; animation: listen 1s ease-in-out infinite; }
+  .tile.listening .status { color: #c0392b; }
+  @keyframes listen { 50% { box-shadow: 0 0 0 8px rgba(224,68,62,.25); } }
+  .tile.great button.word { background: #2fa84f; color: #fff; border-color: #1f7a37; transform: scale(1.06); }
+  .tile.great .status { color: #1f7a37; font-size: 18px; }
+  .tile.tried .status { color: #8a5a00; }
 </style>
 </head>
 <body>
 <h1>⭐ Power Words ⭐</h1>
-<p class="tip">Tap a word to hear it!</p>
+<div class="modes">
+  <button id="modeHear">🔊 Hear it</button>
+  <button id="modeRead">🎤 Read it</button>
+</div>
+<p class="tip" id="tip"></p>
+<div id="banner"></div>
 <div id="app"></div>
 
 <script>
@@ -77,8 +111,24 @@ var groups = [
 ];
 
 // A few words sound wrong when read alone, so we tell the voice how to say them.
-var sayAs = { "a": "uh", "I": "eye", "read": "reed" };
+var sayAs = { "a": "uh", "I": "eye" };
 
+// Words that sound the same. Speech recognition can't hear spelling,
+// so any of these count as reading the word correctly.
+var SOUNDS_LIKE = {
+  "the": ["thee"], "a": ["uh", "ah", "ay", "eh"], "to": ["two", "too", "2"], "two": ["to", "too", "2"],
+  "for": ["four", "fore", "4"], "i": ["eye", "aye"], "one": ["won", "1"], "no": ["know"], "know": ["no"],
+  "there": ["their", "they're"], "their": ["there", "they're"], "write": ["right", "rite", "wright"],
+  "by": ["buy", "bye"], "new": ["knew", "gnu"], "see": ["sea", "c"], "so": ["sew", "sow"], "be": ["bee", "b"],
+  "its": ["it's"], "in": ["inn"], "made": ["maid"], "him": ["hymn"], "way": ["weigh", "whey"],
+  "would": ["wood"], "which": ["witch"], "some": ["sum"], "time": ["thyme"], "where": ["wear", "ware"],
+  "your": ["you're", "yore"], "you": ["u", "ewe", "yew"], "are": ["r"], "do": ["due", "dew"],
+  "not": ["knot"], "been": ["bin", "ben"], "we": ["wee"], "or": ["oar", "ore"], "find": ["fined"],
+  "an": ["ann", "anne"], "than": ["then"], "then": ["than"], "said": ["sed"], "words": ["word's"],
+  "he": ["hee"], "her": ["hur"], "my": ["mi"], "who": ["hoo"], "little": ["lil"]
+};
+
+// ---------- speaking ----------
 var voice = null;
 function pickVoice() {
   var voices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
@@ -97,25 +147,173 @@ if (window.speechSynthesis) {
   speechSynthesis.onvoiceschanged = pickVoice;
 }
 
-function speak(word, btn) {
+function say(text, btn) {
   if (!window.speechSynthesis) { alert("Sorry, this browser can't talk."); return; }
-  speechSynthesis.cancel();
-  var u = new SpeechSynthesisUtterance(sayAs[word] || word);
-  if (voice) u.voice = voice;
-  u.lang = "en-US";
-  u.rate = 0.8;
-  u.pitch = 1.05;
-  btn.classList.add("speaking");
-  u.onend = u.onerror = function () { btn.classList.remove("speaking"); };
-  setTimeout(function () { btn.classList.remove("speaking"); }, 1500);
-  speechSynthesis.speak(u);
+  function go() {
+    var u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.lang = "en-US"; u.rate = 0.8; u.pitch = 1.05;
+    if (btn) {
+      btn.classList.add("speaking");
+      u.onend = u.onerror = function () { btn.classList.remove("speaking"); };
+      setTimeout(function () { btn.classList.remove("speaking"); }, 1500);
+    }
+    speechSynthesis.speak(u);
+  }
+  // Safari can swallow speech that starts right after cancel(), so only
+  // cancel when something is playing and wait a moment.
+  if (speechSynthesis.speaking || speechSynthesis.pending) {
+    speechSynthesis.cancel();
+    setTimeout(go, 120);
+  } else {
+    go();
+  }
+}
+function speak(word, btn) { say(sayAs[word] || word, btn); }
+
+// ---------- listening ----------
+var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+var GITHUB_URL = "https://vvm26br2pj-max.github.io/power-words/";
+
+function showBanner(html) { var b = document.getElementById("banner"); b.innerHTML = html; b.classList.add("show"); }
+function hideBanner() { document.getElementById("banner").classList.remove("show"); }
+
+function norm(s) {
+  return s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]/g, " ").replace(/\s+/g, " ").trim();
+}
+function editDistance(a, b) {
+  var d = [];
+  for (var i = 0; i <= a.length; i++) { d[i] = [i]; }
+  for (var j = 1; j <= b.length; j++) d[0][j] = j;
+  for (i = 1; i <= a.length; i++)
+    for (j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+function heardWord(word, transcript) {
+  var target = word.toLowerCase();
+  var ok = [target].concat(SOUNDS_LIKE[target] || []);
+  var t = norm(transcript);
+  if (ok.indexOf(t) >= 0) return true;
+  var tokens = t.split(" ");
+  for (var i = 0; i < tokens.length; i++) {
+    if (ok.indexOf(tokens[i]) >= 0) return true;
+    // Longer words: allow one letter off (e.g. "peoples" for "people").
+    if (target.length >= 5 && editDistance(tokens[i], target) <= 1) return true;
+  }
+  return false;
 }
 
+var active = null; // { rec, tile, done }
+function stopListening() {
+  if (active && !active.done) {
+    active.done = true;
+    try { active.rec.abort(); } catch (e) {}
+    active.tile.classList.remove("listening");
+  }
+  active = null;
+}
+function clearTile(tile) {
+  tile.classList.remove("listening", "tried", "great", "open");
+}
+function hideForTwoMinutes(tile) {
+  clearTile(tile);
+  tile.classList.add("gone");
+  setTimeout(function () { tile.classList.remove("gone"); }, 2 * 60 * 1000);
+}
+
+function listen(word, tile) {
+  stopListening();
+  hideBanner();
+  if (!Recognition) {
+    showBanner("This browser can't listen. Read it works in Safari on an iPad or iPhone, or in Chrome on a computer.");
+    return;
+  }
+  if (window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+
+  var status = tile.querySelector(".status");
+  var rec = new Recognition();
+  rec.lang = "en-US";
+  rec.interimResults = true;
+  rec.maxAlternatives = 5;
+  rec.continuous = false;
+  var me = { rec: rec, tile: tile, done: false, heard: "" };
+  active = me;
+
+  function finish(ok, message) {
+    if (me.done) return;
+    me.done = true;
+    if (active === me) active = null;
+    try { rec.abort(); } catch (e) {}
+    tile.classList.remove("listening");
+    if (ok) {
+      tile.classList.add("great");
+      status.textContent = "⭐ Great reading!";
+      setTimeout(function () { hideForTwoMinutes(tile); }, 1300);
+    } else {
+      tile.classList.add("tried");
+      status.textContent = message ||
+        (me.heard ? "Try again! I heard “" + me.heard + "”" : "Try again!");
+    }
+  }
+
+  rec.onresult = function (e) {
+    for (var i = 0; i < e.results.length; i++) {
+      for (var k = 0; k < e.results[i].length; k++) {
+        var text = e.results[i][k].transcript;
+        if (heardWord(word, text)) { finish(true); return; }
+        if (k === 0 && text.trim()) me.heard = text.trim();
+      }
+    }
+  };
+  rec.onerror = function (e) {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      finish(false, "The microphone isn't working.");
+      if (window.self !== window.top) {
+        showBanner("The microphone can't be used inside this page. Open " +
+          '<a href="' + GITHUB_URL + '" target="_blank" rel="noopener">the Power Words website</a> in Safari to use Read it.');
+      } else {
+        showBanner("Please allow the microphone. On an iPad, also check that Dictation is on: " +
+          "Settings → General → Keyboard → Enable Dictation.");
+      }
+    } else if (e.error === "no-speech") {
+      finish(false, "I didn't hear anything. Tap the word and try again!");
+    } else if (e.error !== "aborted") {
+      finish(false);
+    }
+  };
+  rec.onend = function () { finish(false); };
+
+  clearTile(tile);
+  tile.classList.add("listening");
+  status.textContent = "🎤 Listening… read the word!";
+  try { rec.start(); } catch (err) { finish(false, "Tap the word to try again."); }
+  setTimeout(function () { if (!me.done) { try { rec.stop(); } catch (e) {} } }, 7000);
+}
+
+// ---------- mode switch ----------
+var mode = "hear";
+try { if (localStorage.getItem("powerWords.mode") === "read") mode = "read"; } catch (e) {}
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem("powerWords.mode", m); } catch (e) {}
+  stopListening(); hideBanner();
+  document.querySelectorAll(".tile").forEach(clearTile);
+  document.getElementById("modeHear").classList.toggle("on", m === "hear");
+  document.getElementById("modeRead").classList.toggle("on", m === "read");
+  document.getElementById("tip").textContent = m === "hear"
+    ? "Tap a word to hear it!"
+    : "Tap a word, then read it out loud!";
+}
+document.getElementById("modeHear").onclick = function () { setMode("hear"); };
+document.getElementById("modeRead").onclick = function () { setMode("read"); };
+
+// ---------- the words ----------
 var app = document.getElementById("app");
 var n = 1;
 var openTile = null;
 function closeOpen(except) {
-  if (openTile && openTile !== except) openTile.classList.remove("open");
+  if (openTile && openTile !== except) clearTile(openTile);
 }
 groups.forEach(function (g) {
   var t = document.createElement("div");
@@ -131,30 +329,42 @@ groups.forEach(function (g) {
     b.className = "word";
     b.style.setProperty("--c", g.color);
     b.innerHTML = '<span class="num">' + n + '</span>' + w;
+    var status = document.createElement("div");
+    status.className = "status";
     var choices = document.createElement("div");
     choices.className = "choices";
     choices.innerHTML = '<button class="yes" aria-label="Got it">✓</button>' +
                         '<button class="no" aria-label="Not yet">✗</button>';
+    var readChoices = document.createElement("div");
+    readChoices.className = "readChoices";
+    readChoices.innerHTML = '<button class="hear" aria-label="Hear it">🔊</button>' +
+                            '<button class="yes" aria-label="I read it right">✓</button>';
     tile.appendChild(b);
+    tile.appendChild(status);
     tile.appendChild(choices);
+    tile.appendChild(readChoices);
 
     b.addEventListener("click", function () {
-      speak(w, b);
       closeOpen(tile);
-      tile.classList.add("open");
       openTile = tile;
+      if (mode === "read") {
+        listen(w, tile);
+      } else {
+        speak(w, b);
+        tile.classList.add("open");
+      }
     });
-    // Tick: hide the word for 2 minutes, then bring it back.
+    // Hear it: tick hides the word for 2 minutes, cross keeps it.
     choices.querySelector(".yes").addEventListener("click", function () {
-      tile.classList.remove("open");
-      tile.classList.add("gone");
-      openTile = null;
-      setTimeout(function () { tile.classList.remove("gone"); }, 2 * 60 * 1000);
+      openTile = null; hideForTwoMinutes(tile);
     });
-    // Cross: the word stays so he can practise it again.
     choices.querySelector(".no").addEventListener("click", function () {
-      tile.classList.remove("open");
-      openTile = null;
+      openTile = null; clearTile(tile);
+    });
+    // Read it, after a miss: hear the word, or mark it right by hand.
+    readChoices.querySelector(".hear").addEventListener("click", function () { speak(w, b); });
+    readChoices.querySelector(".yes").addEventListener("click", function () {
+      openTile = null; hideForTwoMinutes(tile);
     });
 
     grid.appendChild(tile);
@@ -162,6 +372,7 @@ groups.forEach(function (g) {
   });
   app.appendChild(grid);
 });
+setMode(mode);
 </script>
 </body>
 </html>
