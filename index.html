@@ -79,6 +79,8 @@
   .tile.listening button.word { border-color: #e0443e; animation: listen 1s ease-in-out infinite; }
   .tile.listening .status { color: #c0392b; }
   @keyframes listen { 50% { box-shadow: 0 0 0 8px rgba(224,68,62,.25); } }
+  .tile.waiting button.word, #card.waiting { border-color: #bbb; animation: none; opacity: .8; }
+  .tile.waiting .status { color: #888; }
   .tile.great button.word { background: #2fa84f; color: #fff; border-color: #1f7a37; transform: scale(1.06); }
   .tile.great .status { color: #1f7a37; font-size: 18px; }
   .tile.tried .status { color: #8a5a00; }
@@ -167,7 +169,9 @@ var sayAs = { "a": "uh", "I": "eye" };
 // Words that sound the same. Speech recognition can't hear spelling,
 // so any of these count as reading the word correctly.
 var SOUNDS_LIKE = {
-  "the": ["thee"], "a": ["uh", "ah", "ay", "eh"], "to": ["two", "too", "2"], "two": ["to", "too", "2"],
+  "the": ["thee", "da", "duh", "de", "tha", "thuh"], "of": ["uv", "ov"], "and": ["an", "n", "en"],
+  "that": ["dat"], "this": ["dis"], "with": ["wit"], "they": ["day"], "them": ["dem"], "then": ["than", "den"],
+  "was": ["wuz"], "is": ["iz"], "it": ["itt"], "at": ["att"], "on": ["onn"], "as": ["az"], "if": ["iff"], "a": ["uh", "ah", "ay", "eh"], "to": ["two", "too", "2"], "two": ["to", "too", "2"],
   "for": ["four", "fore", "4"], "i": ["eye", "aye"], "one": ["won", "1"], "no": ["know"], "know": ["no"],
   "there": ["their", "they're"], "their": ["there", "they're"], "write": ["right", "rite", "wright"],
   "by": ["buy", "bye"], "new": ["knew", "gnu"], "see": ["sea", "c"], "so": ["sew", "sow"], "be": ["bee", "b"],
@@ -175,7 +179,7 @@ var SOUNDS_LIKE = {
   "would": ["wood"], "which": ["witch"], "some": ["sum"], "time": ["thyme"], "where": ["wear", "ware"],
   "your": ["you're", "yore"], "you": ["u", "ewe", "yew"], "are": ["r"], "do": ["due", "dew"],
   "not": ["knot"], "been": ["bin", "ben"], "we": ["wee"], "or": ["oar", "ore"], "find": ["fined"],
-  "an": ["ann", "anne"], "than": ["then"], "then": ["than"], "said": ["sed"], "words": ["word's"],
+  "an": ["ann", "anne"], "than": ["then"], "said": ["sed"], "words": ["word's"],
   "he": ["hee"], "her": ["hur"], "my": ["mi"], "who": ["hoo"], "little": ["lil"]
 };
 
@@ -241,6 +245,8 @@ function editDistance(a, b) {
       d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
   return d[a.length][b.length];
 }
+var POWER = {};
+groups.forEach(function (g) { g.words.split(" ").forEach(function (w) { POWER[w.toLowerCase()] = true; }); });
 function heardWord(word, transcript) {
   var target = word.toLowerCase();
   var ok = [target].concat(SOUNDS_LIKE[target] || []);
@@ -249,8 +255,9 @@ function heardWord(word, transcript) {
   var tokens = t.split(" ");
   for (var i = 0; i < tokens.length; i++) {
     if (ok.indexOf(tokens[i]) >= 0) return true;
-    // Longer words: allow one letter off (e.g. "peoples" for "people").
-    if (target.length >= 5 && editDistance(tokens[i], target) <= 1) return true;
+    // Words of 4+ letters: allow one letter off (e.g. "peoples" for "people").
+    // (Not when he said a different Power Word, e.g. "then" for "them".)
+    if (target.length >= 4 && !POWER[tokens[i]] && editDistance(tokens[i], target) <= 1) return true;
   }
   return false;
 }
@@ -260,13 +267,18 @@ var active = null; // the listen in progress
 function stopListening() {
   if (active && !active.done) {
     active.done = true;
+    clearTimeout(active.timer);
     try { active.rec.abort(); } catch (e) {}
     if (active.onCancel) active.onCancel();
   }
   active = null;
 }
 
-// Listen for one word. h.done({ ok, kind, heard, message }) is called once:
+// Listen for one word. Phones take a moment to switch the microphone on and
+// often cut off a word said too early, so:
+//  - h.ready() is called only once the mic is really on ("Now read it!"),
+//  - we keep listening for a few seconds, so saying it again still counts.
+// h.done({ ok, kind, heard, message }) is called once:
 // kind is "hit", "miss", "silent" or "mic" (microphone problem).
 function recognize(word, h) {
   stopListening();
@@ -281,19 +293,38 @@ function recognize(word, h) {
   rec.lang = "en-US";
   rec.interimResults = true;
   rec.maxAlternatives = 5;
-  rec.continuous = false;
-  var me = { rec: rec, done: false, heard: "", onCancel: h.onCancel };
+  rec.continuous = true;
+  var me = { rec: rec, done: false, heard: "", onCancel: h.onCancel, timer: null, isReady: false };
   active = me;
 
   function finish(kind, message) {
     if (me.done) return;
     me.done = true;
+    clearTimeout(me.timer);
     if (active === me) active = null;
     try { rec.abort(); } catch (e) {}
     h.done({ ok: kind === "hit", kind: kind, heard: me.heard, message: message });
   }
+  function stopSoon(ms) {
+    clearTimeout(me.timer);
+    me.timer = setTimeout(function () {
+      if (me.done) return;
+      try { rec.stop(); } catch (e) {}
+      // If the browser never reports back after stopping, end it ourselves.
+      me.timer = setTimeout(function () { finish(me.heard ? "miss" : "silent"); }, 1500);
+    }, ms);
+  }
+  function ready() {
+    if (me.isReady || me.done) return;
+    me.isReady = true;
+    if (h.ready) h.ready();
+    stopSoon(6000); // 6 seconds to read it (as many tries as he likes)
+  }
 
+  rec.onstart = ready;
+  rec.onaudiostart = ready;
   rec.onresult = function (e) {
+    ready();
     for (var i = 0; i < e.results.length; i++) {
       for (var k = 0; k < e.results[i].length; k++) {
         var text = e.results[i][k].transcript;
@@ -309,7 +340,7 @@ function recognize(word, h) {
         showBanner("The microphone can't be used inside this page. Open " +
           '<a href="' + GITHUB_URL + '" target="_blank" rel="noopener">the Power Words website</a> in Safari to use Read it.');
       } else {
-        showBanner("Please allow the microphone. On an iPad, also check that Dictation is on: " +
+        showBanner("Please allow the microphone. On an iPad or iPhone, also check that Dictation is on: " +
           "Settings → General → Keyboard → Enable Dictation.");
       }
     } else if (e.error === "no-speech") {
@@ -321,7 +352,7 @@ function recognize(word, h) {
   rec.onend = function () { finish(me.heard ? "miss" : "silent"); };
 
   try { rec.start(); } catch (err) { finish("silent", "Tap to try again."); return false; }
-  setTimeout(function () { if (!me.done) { try { rec.stop(); } catch (e) {} } }, 7000);
+  stopSoon(9000); // safety net in case the mic never starts
   return true;
 }
 
@@ -338,9 +369,10 @@ function hideForTwoMinutes(tile) {
 function listen(word, tile) {
   var status = tile.querySelector(".status");
   var started = recognize(word, {
-    onCancel: function () { tile.classList.remove("listening"); },
+    onCancel: function () { tile.classList.remove("listening", "waiting"); },
+    ready: function () { tile.classList.remove("waiting"); status.textContent = "🎤 Now read it!"; },
     done: function (r) {
-      tile.classList.remove("listening");
+      tile.classList.remove("listening", "waiting");
       if (r.ok) {
         tile.classList.add("great");
         status.textContent = "⭐ Great reading!";
@@ -354,8 +386,8 @@ function listen(word, tile) {
   });
   if (started) {
     clearTile(tile);
-    tile.classList.add("listening");
-    status.textContent = "🎤 Listening… read the word!";
+    tile.classList.add("listening", "waiting");
+    status.textContent = "Get ready…";
   }
 }
 
@@ -507,9 +539,10 @@ function listenCard() {
   if (deck.i >= deck.cards.length) return;
   var c = deck.cards[deck.i];
   var started = recognize(c.w, {
-    onCancel: function () { cardEl.classList.remove("listening"); },
+    onCancel: function () { cardEl.classList.remove("listening", "waiting"); },
+    ready: function () { cardEl.classList.remove("waiting"); cardStatus.textContent = "🎤 Now read it!"; },
     done: function (r) {
-      cardEl.classList.remove("listening");
+      cardEl.classList.remove("listening", "waiting");
       if (r.ok) {
         if (deck.result === null) { deck.result = true; deck.right++; }
         cardEl.classList.remove("wrong"); void cardEl.offsetWidth;
@@ -533,8 +566,8 @@ function listenCard() {
   });
   if (started) {
     cardEl.classList.remove("right", "wrong", "pop");
-    cardEl.classList.add("listening");
-    cardStatus.textContent = "🎤 Listening…";
+    cardEl.classList.add("listening", "waiting");
+    cardStatus.textContent = "Get ready…";
   }
 }
 
