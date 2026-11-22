@@ -39,6 +39,20 @@
     box-shadow: 0 1px 0 rgba(0,0,0,.15);
     border-color: #333;
   }
+  .tile { display: flex; flex-direction: column; gap: 6px; transition: opacity .4s; }
+  .tile > button.word { width: 100%; }
+  .tile.gone { opacity: 0; pointer-events: none; }
+  .choices { display: none; gap: 6px; }
+  .tile.open .choices { display: flex; }
+  .choices button {
+    flex: 1; font-size: 30px; font-weight: bold; color: #fff;
+    border: none; border-radius: 14px; padding: 8px 0;
+    cursor: pointer; touch-action: manipulation;
+    box-shadow: 0 3px 0 rgba(0,0,0,.2);
+  }
+  .choices .yes { background: #2fa84f; }
+  .choices .no  { background: #e0443e; }
+  .choices button:active { transform: translateY(2px); box-shadow: none; }
 </style>
 </head>
 <body>
@@ -99,6 +113,10 @@ function speak(word, btn) {
 
 var app = document.getElementById("app");
 var n = 1;
+var openTile = null;
+function closeOpen(except) {
+  if (openTile && openTile !== except) openTile.classList.remove("open");
+}
 groups.forEach(function (g) {
   var t = document.createElement("div");
   t.className = "group-title";
@@ -107,12 +125,39 @@ groups.forEach(function (g) {
   var grid = document.createElement("div");
   grid.className = "grid";
   g.words.split(" ").forEach(function (w) {
+    var tile = document.createElement("div");
+    tile.className = "tile";
     var b = document.createElement("button");
     b.className = "word";
     b.style.setProperty("--c", g.color);
     b.innerHTML = '<span class="num">' + n + '</span>' + w;
-    b.addEventListener("click", function () { speak(w, b); });
-    grid.appendChild(b);
+    var choices = document.createElement("div");
+    choices.className = "choices";
+    choices.innerHTML = '<button class="yes" aria-label="Got it">✓</button>' +
+                        '<button class="no" aria-label="Not yet">✗</button>';
+    tile.appendChild(b);
+    tile.appendChild(choices);
+
+    b.addEventListener("click", function () {
+      speak(w, b);
+      closeOpen(tile);
+      tile.classList.add("open");
+      openTile = tile;
+    });
+    // Tick: hide the word for 2 minutes, then bring it back.
+    choices.querySelector(".yes").addEventListener("click", function () {
+      tile.classList.remove("open");
+      tile.classList.add("gone");
+      openTile = null;
+      setTimeout(function () { tile.classList.remove("gone"); }, 2 * 60 * 1000);
+    });
+    // Cross: the word stays so he can practise it again.
+    choices.querySelector(".no").addEventListener("click", function () {
+      tile.classList.remove("open");
+      openTile = null;
+    });
+
+    grid.appendChild(tile);
     n++;
   });
   app.appendChild(grid);
