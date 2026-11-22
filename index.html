@@ -139,9 +139,10 @@
   <button id="card"></button>
   <div id="cardStatus"></div>
   <div class="cardBtns">
-    <button class="mic" id="cardMic">🎤 Read it</button>
+    <button class="mic" id="cardMic" hidden>🎤 Start</button>
+    <button class="plain" id="cardPause" hidden>⏸ Pause</button>
     <button class="hear" id="cardHear" hidden>🔊 Hear it</button>
-    <button class="next" id="cardNext" hidden>Next ➜</button>
+    <button class="next" id="cardNext" hidden>Skip ➜</button>
     <button class="next" id="cardRedo" hidden></button>
     <button class="plain" id="cardShuffle" hidden>🔀 All words again</button>
   </div>
@@ -400,7 +401,7 @@ try {
 var TIPS = {
   hear: "Tap a word to hear it!",
   read: "Tap a word, then read it out loud!",
-  cards: "Read the word on the card out loud!"
+  cards: "Read each card out loud. It moves on by itself when you get it right!"
 };
 function setMode(m) {
   mode = m;
@@ -412,7 +413,7 @@ function setMode(m) {
   document.getElementById("modeCards").classList.toggle("on", m === "cards");
   document.body.classList.toggle("cards-mode", m === "cards");
   document.getElementById("tip").textContent = TIPS[m];
-  if (m === "cards") showCard();
+  if (m === "cards") { showCard(); startCards(); } else if (typeof stopCards === "function") stopCards();
 }
 document.getElementById("modeHear").onclick = function () { setMode("hear"); };
 document.getElementById("modeRead").onclick = function () { setMode("read"); };
@@ -483,6 +484,8 @@ groups.forEach(function (g) {
   app.appendChild(grid);
 });
 // ---------- flashcards ----------
+// One long listening session runs while the cards are showing, so he never
+// has to press anything: read it right -> green -> next card by itself.
 var ALL = []; // { w, color }
 groups.forEach(function (g) {
   g.words.split(" ").forEach(function (w) { ALL.push({ w: w, color: g.color }); });
@@ -492,100 +495,238 @@ function shuffled(list) {
   for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; }
   return a;
 }
-var deck = { cards: shuffled(ALL), i: 0, right: 0, wrong: 0, missed: [], result: null };
+var deck;
 function newDeck(list) {
   deck = { cards: shuffled(list), i: 0, right: 0, wrong: 0, missed: [], result: null };
 }
+newDeck(ALL);
 
 var cardEl = document.getElementById("card");
 var cardStatus = document.getElementById("cardStatus");
 function btn(id, show) { document.getElementById(id).hidden = !show; }
+function current() { return deck.cards[deck.i]; }
+function deckDone() { return deck.i >= deck.cards.length; }
 
-function showCard() {
-  stopListening();
+// Session state
+var sess = null;        // { rec, ended }
+var wantListening = false; // true while the cards should be listening
+var micWorked = false;  // the mic has worked at least once this visit
+var locked = false;     // between "right!" and the next card
+var ignoreUntil = 0;    // ignore what the mic hears while the iPad is talking
+var from = { idx: 0, prefix: "" }; // where this card's speech starts in the results
+
+function setButtons(state) {
+  // state: "listening", "needTap", "paused", "done"
+  btn("cardMic", state === "needTap" || state === "paused");
+  btn("cardPause", state === "listening");
+  btn("cardHear", state !== "done");
+  btn("cardNext", state !== "done");
+  btn("cardRedo", state === "done" && deck.missed.length > 0);
+  btn("cardShuffle", state === "done");
+}
+function updateScore() {
   document.getElementById("cardRight").textContent = deck.right;
   document.getElementById("cardWrong").textContent = deck.wrong;
+}
+
+function showCard() {
+  updateScore();
   cardEl.className = "";
   void cardEl.offsetWidth;
-  if (deck.i >= deck.cards.length) {
-    // Finished the deck.
+  if (deckDone()) {
+    stopCards();
     document.getElementById("cardProg").textContent = "All done!";
     cardEl.style.setProperty("--c", "#fff3a3");
     cardEl.style.fontSize = "64px";
     cardEl.textContent = deck.wrong ? "🎉" : "🏆";
     cardEl.classList.add("pop");
     cardStatus.textContent = "You read " + deck.right + " of " + deck.cards.length + " words right the first time!";
-    btn("cardMic", false); btn("cardHear", false); btn("cardNext", false);
-    var redo = document.getElementById("cardRedo");
-    redo.textContent = "🔁 Practice the red ones (" + deck.missed.length + ")";
-    btn("cardRedo", deck.missed.length > 0);
-    btn("cardShuffle", true);
+    document.getElementById("cardRedo").textContent = "🔁 Practice the red ones (" + deck.missed.length + ")";
+    setButtons("done");
     say(deck.wrong ? "All done! Great work." : "Perfect! You read every word.");
     return;
   }
-  var c = deck.cards[deck.i];
+  var c = current();
   deck.result = null;
   document.getElementById("cardProg").textContent = "Card " + (deck.i + 1) + " of " + deck.cards.length;
   cardEl.style.setProperty("--c", c.color);
   cardEl.style.fontSize = c.w.length > 6 ? "72px" : "96px";
   cardEl.textContent = c.w;
   cardEl.classList.add("pop");
-  cardStatus.textContent = "Tap 🎤 and read the word!";
-  btn("cardMic", true); btn("cardHear", false); btn("cardNext", false);
-  btn("cardRedo", false); btn("cardShuffle", false);
-}
-
-function listenCard() {
-  if (deck.i >= deck.cards.length) return;
-  var c = deck.cards[deck.i];
-  var started = recognize(c.w, {
-    onCancel: function () { cardEl.classList.remove("listening", "waiting"); },
-    ready: function () { cardEl.classList.remove("waiting"); cardStatus.textContent = "🎤 Now read it!"; },
-    done: function (r) {
-      cardEl.classList.remove("listening", "waiting");
-      if (r.ok) {
-        if (deck.result === null) { deck.result = true; deck.right++; }
-        cardEl.classList.remove("wrong"); void cardEl.offsetWidth;
-        cardEl.classList.add("right");
-        cardStatus.textContent = "⭐ Great reading!";
-        btn("cardMic", false); btn("cardHear", false); btn("cardNext", true);
-      } else if (r.kind === "miss") {
-        if (deck.result === null) { deck.result = false; deck.wrong++; deck.missed.push(c); }
-        cardEl.classList.remove("wrong"); void cardEl.offsetWidth;
-        cardEl.classList.add("wrong");
-        cardStatus.textContent = "Not quite! I heard “" + r.heard + "”";
-        document.getElementById("cardMic").textContent = "🎤 Try again";
-        btn("cardMic", true); btn("cardHear", true); btn("cardNext", true);
-      } else {
-        cardStatus.textContent = r.message || "I didn't hear anything. Tap 🎤 and try again!";
-        btn("cardMic", true);
-      }
-      document.getElementById("cardRight").textContent = deck.right;
-      document.getElementById("cardWrong").textContent = deck.wrong;
-    }
-  });
-  if (started) {
-    cardEl.classList.remove("right", "wrong", "pop");
-    cardEl.classList.add("listening", "waiting");
+  if (sess && !sess.ended) {
+    cardEl.classList.add("listening");
+    cardStatus.textContent = "🎤 Read the word!";
+    setButtons("listening");
+  } else if (wantListening) {
     cardStatus.textContent = "Get ready…";
+    setButtons("listening");
+  } else {
+    cardStatus.textContent = "Tap 🎤 Start to begin!";
+    setButtons("paused");
   }
 }
 
-cardEl.onclick = listenCard;
-document.getElementById("cardMic").onclick = listenCard;
+function markFrom(e) {
+  // Only listen to what is said from now on (for the new card).
+  if (!e || !e.results.length) { from = { idx: 0, prefix: "" }; return; }
+  var last = e.results[e.results.length - 1];
+  if (last.isFinal) from = { idx: e.results.length, prefix: "" };
+  else from = { idx: e.results.length - 1, prefix: last[0].transcript };
+}
+var lastEvent = null;
+
+function gotRight() {
+  locked = true;
+  if (deck.result === null) { deck.result = true; deck.right++; }
+  updateScore();
+  cardEl.classList.remove("wrong", "listening", "pop"); void cardEl.offsetWidth;
+  cardEl.classList.add("right");
+  cardStatus.textContent = "⭐ Great reading!";
+  setTimeout(function () {
+    deck.i++;
+    markFrom(lastEvent);
+    locked = false;
+    showCard();
+  }, 900);
+}
+function gotWrong(heard) {
+  if (deck.result === null) { deck.result = false; deck.wrong++; deck.missed.push(current()); }
+  updateScore();
+  cardEl.classList.remove("wrong", "right", "pop"); void cardEl.offsetWidth;
+  cardEl.classList.add("wrong");
+  cardStatus.textContent = "Not quite! I heard “" + heard + "”. Try again!";
+}
+
+function startCards() {
+  wantListening = true;
+  hideBanner();
+  if (deckDone()) return;
+  if (!Recognition) {
+    showBanner("This browser can't listen. Flashcards work in Safari on an iPad or iPhone, or in Chrome on a computer.");
+    wantListening = false; setButtons("paused"); return;
+  }
+  if (sess && !sess.ended) return;
+  if (window.speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+
+  var rec = new Recognition();
+  rec.lang = "en-US";
+  rec.interimResults = true;
+  rec.maxAlternatives = 5;
+  rec.continuous = true;
+  var me = { rec: rec, ended: false };
+  sess = me;
+  from = { idx: 0, prefix: "" };
+  cardStatus.textContent = "Get ready…";
+  setButtons("listening");
+
+  function onReady() {
+    if (me.ready || me.ended) return;
+    me.ready = true; micWorked = true;
+    if (!locked && !deckDone()) {
+      cardEl.classList.add("listening");
+      cardStatus.textContent = "🎤 Read the word!";
+    }
+  }
+  rec.onstart = onReady;
+  rec.onaudiostart = onReady;
+  rec.onresult = function (e) {
+    onReady();
+    lastEvent = e;
+    if (locked || deckDone()) return;
+    if (Date.now() < ignoreUntil) { markFrom(e); return; }
+    var word = current().w;
+    for (var i = from.idx; i < e.results.length; i++) {
+      for (var k = 0; k < e.results[i].length; k++) {
+        var text = e.results[i][k].transcript;
+        if (i === from.idx && from.prefix && text.indexOf(from.prefix) === 0) text = text.slice(from.prefix.length);
+        if (heardWord(word, text)) { gotRight(); return; }
+      }
+    }
+    // A finished phrase that wasn't the word: show red, keep listening.
+    var last = e.results[e.results.length - 1];
+    if (last.isFinal && e.results.length - 1 >= from.idx) {
+      var said = last[0].transcript;
+      if (e.results.length - 1 === from.idx && from.prefix && said.indexOf(from.prefix) === 0) said = said.slice(from.prefix.length);
+      said = said.trim();
+      if (said) gotWrong(said);
+      markFrom(e);
+    }
+  };
+  rec.onerror = function (e) {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      me.blocked = true;
+      if (!micWorked) {
+        wantListening = false;
+        if (window.self !== window.top) {
+          showBanner("The microphone can't be used inside this page. Open " +
+            '<a href="' + GITHUB_URL + '" target="_blank" rel="noopener">the Power Words website</a> in Safari to use Flashcards.');
+        } else {
+          showBanner("Please allow the microphone. On an iPad or iPhone, also check that Dictation is on: " +
+            "Settings → General → Keyboard → Enable Dictation.");
+        }
+      }
+    }
+  };
+  rec.onend = function () {
+    me.ended = true;
+    if (me.stopped) return; // we stopped it on purpose
+    if (sess === me) sess = null;
+    cardEl.classList.remove("listening");
+    // Phones stop listening every so often; start again by ourselves.
+    if (wantListening && mode === "cards" && !deckDone() && !me.blocked) {
+      setTimeout(function () { if (wantListening && !sess) startCards(); }, 250);
+    } else if (wantListening && me.blocked && micWorked) {
+      needTap();
+    } else if (!deckDone()) {
+      wantListening = false;
+      if (!locked) cardStatus.textContent = "Tap 🎤 Start to begin!";
+      setButtons("paused");
+    }
+  };
+  try { rec.start(); } catch (err) { sess = null; needTap(); }
+}
+function needTap() {
+  // The browser wants a tap before it will listen again.
+  wantListening = false;
+  cardEl.classList.remove("listening");
+  cardStatus.textContent = "Tap 🎤 to keep going!";
+  document.getElementById("cardMic").textContent = "🎤 Keep going";
+  setButtons("needTap");
+}
+function stopCards() {
+  wantListening = false;
+  if (sess) { var s = sess; sess = null; s.ended = true; s.stopped = true; try { s.rec.abort(); } catch (e) {} }
+  cardEl.classList.remove("listening");
+}
+function pauseCards() {
+  stopCards();
+  cardStatus.textContent = "Paused. Tap 🎤 Start to keep going.";
+  document.getElementById("cardMic").textContent = "🎤 Start";
+  setButtons("paused");
+}
+
+cardEl.onclick = function () { if (!sess && !deckDone()) startCards(); };
+document.getElementById("cardMic").onclick = function () {
+  document.getElementById("cardMic").textContent = "🎤 Start";
+  startCards();
+};
+document.getElementById("cardPause").onclick = pauseCards;
 document.getElementById("cardHear").onclick = function () {
-  var c = deck.cards[deck.i];
-  if (c) speak(c.w);
+  var c = current();
+  if (!c) return;
+  // Don't let the mic hear the iPad saying the word.
+  ignoreUntil = Date.now() + 2500;
+  speak(c.w);
 };
 document.getElementById("cardNext").onclick = function () {
+  if (deck.result === null) { deck.result = false; deck.wrong++; deck.missed.push(current()); }
   deck.i++;
-  document.getElementById("cardMic").textContent = "🎤 Read it";
+  markFrom(lastEvent);
   showCard();
-  // Tapping Next counts as a tap, so start listening for the new card straight away.
-  if (deck.i < deck.cards.length) listenCard();
+  if (!deckDone() && !sess) startCards();
 };
-document.getElementById("cardRedo").onclick = function () { newDeck(deck.missed); showCard(); };
-document.getElementById("cardShuffle").onclick = function () { newDeck(ALL); showCard(); };
+document.getElementById("cardRedo").onclick = function () { newDeck(deck.missed); showCard(); startCards(); };
+document.getElementById("cardShuffle").onclick = function () { newDeck(ALL); showCard(); startCards(); };
 
 setMode(mode);
 </script>
